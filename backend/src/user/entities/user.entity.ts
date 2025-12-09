@@ -12,6 +12,9 @@ export class User {
   @Column({ type: 'varchar', length: 100, unique: true })
   email!: string;
 
+  @Column({ type: 'varchar', length: 512, nullable: true })
+  refresh_token?: string | null;
+
   @OneToMany(() => Auth, (auth) => auth.user)
   auths!: Auth[];
 }

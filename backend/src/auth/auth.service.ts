@@ -1,4 +1,11 @@
-import { Injectable, BadRequestException } from '@nestjs/common';
+import {
+  Injectable,
+  BadRequestException,
+  Logger,
+  UnauthorizedException,
+  UseGuards,
+  NotFoundException,
+} from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Auth } from './entities/auth.entity';
 import { Repository } from 'typeorm';
@@ -9,9 +16,11 @@ import * as crypto from 'crypto';
 import { LoginDto } from './dto/login.dto';
 import { JwtService } from '@nestjs/jwt';
 import { ConfigService } from '@nestjs/config';
+import { AuthGuard } from '@nestjs/passport';
 
 @Injectable()
 export class AuthService {
+  private logger: Logger = new Logger(AuthService.name);
   constructor(
     private readonly configService: ConfigService,
     @InjectRepository(Auth)
@@ -64,7 +73,7 @@ export class AuthService {
     };
   }
 
-  async verify(id: string, token: string) {
+  async verifyToken(id: string, token: string) {
     const auth = await this.authRepository.findOne({
       where: { id, magic_token: token, active: true },
       relations: ['user'],
@@ -98,6 +107,13 @@ export class AuthService {
     auth.active = false;
     await this.authRepository.save(auth);
 
+    try {
+      (auth.user as any).refresh_token = refreshToken;
+      await this.userRepository.save(auth.user);
+    } catch (err) {
+      this.logger.error('Failed to save refresh token to user', err);
+    }
+
     return {
       message: 'Login successful',
       user: {
@@ -107,6 +123,67 @@ export class AuthService {
       },
       accessToken,
       refreshToken,
+    };
+  }
+
+  async refreshTokens(refreshToken: string) {
+    try {
+      const payload = this.jwtService.verify(refreshToken, {
+        secret: this.configService.get<string>('JWT_REFRESH_SECRET'),
+      });
+
+      const user = await this.userRepository.findOne({
+        where: { id: payload.sub, refresh_token: refreshToken },
+      });
+
+      if (!user) {
+        throw new UnauthorizedException('Invalid refresh token');
+      }
+
+      const newAccessToken = this.jwtService.sign(
+        {
+          sub: user.id,
+          email: user.email,
+        },
+        {
+          expiresIn: '15m',
+          secret: this.configService.get<string>('JWT_ACCESS_SECRET'),
+        },
+      );
+
+      const newRefreshToken = this.jwtService.sign(
+        {
+          sub: user.id,
+        },
+        {
+          expiresIn: '7d',
+          secret: this.configService.get<string>('JWT_REFRESH_SECRET'),
+        },
+      );
+
+      user.refresh_token = newRefreshToken;
+      await this.userRepository.save(user);
+
+      return {
+        accessToken: newAccessToken,
+        refreshToken: newRefreshToken,
+      };
+    } catch (err) {
+      throw new UnauthorizedException('Invalid refresh token');
+    }
+  }
+
+  async getProfile(userId: string) {
+    const user = await this.userRepository.findOne({ where: { id: userId } });
+
+    if (!user) {
+      throw new NotFoundException('User not found');
+    }
+
+    return {
+      id: user.id,
+      name: user.name,
+      email: user.email,
     };
   }
 }
