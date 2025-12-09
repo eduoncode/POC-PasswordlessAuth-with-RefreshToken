@@ -18,4 +18,10 @@ export class AuthController {
   async login(@Body() loginDto: LoginDto) {
     return this.authService.login(loginDto);
   }
+
+  @Post('verify/:id/:token')
+  async verify(@Param('id') id: string, @Param('token') token: string) {
+    const result = await this.authService.verify(id, token);
+    return result;
+  }
 }
